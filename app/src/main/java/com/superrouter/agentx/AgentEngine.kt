@@ -75,7 +75,7 @@ object AgentEngine {
     fun findOfficialInput(root: View) {
         if (root is ViewGroup) {
             if (root is EditText) officialEditText = root
-            if (root is android.widget.ImageButton || (root is android.widget.ImageView && root.isClickable)) {
+            if (root is android.widget.ImageButton || (root is android.widget.ImageView && (root as android.view.View).isClickable)) {
                 officialSendButton = root
             }
             for (i in 0 until root.childCount) findOfficialInput(root.getChildAt(i))
