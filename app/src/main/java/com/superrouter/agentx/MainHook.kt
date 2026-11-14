@@ -1,12 +1,14 @@
 package com.superrouter.agentx
 
 import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Color
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.TextView
 import de.robv.android.xposed.*
 import de.robv.android.xposed.callbacks.XC_LoadPackage
@@ -15,30 +17,22 @@ class MainHook : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != "com.deepseek.chat") return
 
-        XposedBridge.log("【AgentX】开始 Hook DeepSeek...")
+        XposedBridge.log("【AgentX】开始 Hook DeepSeek (悬浮注入模式)...")
 
-        // 1. ★ 核心：拦截所有 TextView 的文字设置，只要设置"深度思考"就注入
-        XposedHelpers.findAndHookMethod("android.widget.TextView", lpparam.classLoader, "setText", CharSequence::class.java, object : XC_MethodHook() {
+        // 1. 拦截 Activity，直接给根视图挂载悬浮按钮
+        XposedHelpers.findAndHookMethod("android.app.Activity", lpparam.classLoader, "onPostResume", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
-                val textView = param.thisObject as TextView
-                val text = param.args[0] as? CharSequence ?: return
+                val activity = param.thisObject as Activity
+                AgentEngine.currentActivity = activity
                 
-                // 模糊匹配文字
-                if (text.toString().contains("深度思考") || text.toString().contains("深度思索")) {
-                    val parent = textView.parent as? ViewGroup
-                    if (parent != null && parent.findViewWithTag<View>("AgentXBtn") == null) {
-                        XposedBridge.log("【AgentX】截获目标文字，准备注入按钮！")
-                        val activity = getActivityFromContext(textView.context)
-                        if (activity != null) {
-                            injectButtonToRow(activity, parent)
-                            AgentEngine.findOfficialInput(activity.window.decorView)
-                        }
-                    }
-                }
+                // 延迟 1.5 秒，等官方界面加载完
+                Handler(Looper.getMainLooper()).postDelayed({
+                    injectFloatingAgentBtn(activity)
+                }, 1500)
             }
         })
 
-        // 2. 接收相册选择结果（保留）
+        // 2. 接收相册选择结果
         XposedHelpers.findAndHookMethod("android.app.Activity", lpparam.classLoader, "onActivityResult", 
             Int::class.java, Int::class.java, Intent::class.java,
             object : XC_MethodHook() {
@@ -52,7 +46,7 @@ class MainHook : IXposedHookLoadPackage {
                 }
             })
 
-        // 3. 拦截网络流（保留）
+        // 3. 网络拦截（已经成功，保留）
         try {
             XposedHelpers.findAndHookMethod("java.io.BufferedReader", lpparam.classLoader, "readLine", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
@@ -67,13 +61,21 @@ class MainHook : IXposedHookLoadPackage {
         } catch (e: Throwable) { }
     }
 
-    private fun injectButtonToRow(activity: Activity, targetRow: ViewGroup) {
+    private fun injectFloatingAgentBtn(activity: Activity) {
+        val decorView = activity.window.decorView as? ViewGroup ?: return
+        
+        // 防止重复添加
+        if (decorView.findViewWithTag<View>("AgentXFloatingBtn") != null) return
+
+        XposedBridge.log("【AgentX】正在向 ${activity.javaClass.simpleName} 注入悬浮按钮...")
+
         val btn = TextView(activity).apply {
-            tag = "AgentXBtn"
+            tag = "AgentXFloatingBtn"
             text = " Agent"
             setTextColor(Color.WHITE)
-            setPadding(30, 15, 30, 15)
+            setPadding(40, 20, 40, 20)
             background = GlassDrawable()
+            elevation = 20f
             
             val icon = AgentIcon("lightning", Color.WHITE)
             icon.setBounds(0, 0, 40, 40)
@@ -88,16 +90,21 @@ class MainHook : IXposedHookLoadPackage {
                 true
             }
         }
-        targetRow.addView(btn)
-    }
 
-    // 从 Context 中提取 Activity 的通用方法
-    private fun getActivityFromContext(context: Context?): Activity? {
-        var ctx = context
-        while (ctx is ContextWrapper) {
-            if (ctx is Activity) return ctx
-            ctx = ctx.baseContext
+        // 使用 FrameLayout.LayoutParams 悬浮在屏幕中下方（不挡住输入框）
+        val params = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.END
+            bottomMargin = 300 // 距离底部 300 像素，避开发送框
+            rightMargin = 50   // 靠右
         }
-        return null
+
+        // 直接把按钮添加到最顶层的 DecorView 中
+        decorView.addView(btn, params)
+        
+        // 顺便尝试寻找一下输入框
+        AgentEngine.findOfficialInput(decorView)
     }
 }
